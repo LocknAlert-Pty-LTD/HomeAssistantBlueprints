@@ -1,0 +1,81 @@
+blueprint:
+  name: RF Low Battery Trouble Notifier
+  description: >
+    Periodically scans all binary_sensor entities on a chosen device for any
+    entity_id containing a keyword (e.g. rf_low_battery_trouble) that is
+    currently "on", and notifies with the affected zone names.
+  domain: automation
+  input:
+    target_device:
+      name: Panel/Expander Device
+      description: Device whose binary_sensors will be scanned.
+      selector:
+        device:
+
+    trouble_keyword:
+      name: Trouble Sensor Keyword
+      description: Substring to match in entity_id.
+      default: "rf_low_battery_trouble"
+      selector:
+        text:
+
+    scan_interval:
+      name: Scan Interval
+      description: How often to run the check.
+      default: "/60"
+      selector:
+        select:
+          options:
+            - label: "Every 15 minutes"
+              value: "/15"
+            - label: "Every 30 minutes"
+              value: "/30"
+            - label: "Every hour"
+              value: "/60"
+
+    notify_service:
+      name: Notify Service
+      description: e.g. notify.mobile_app_raines_phone
+      selector:
+        text:
+
+    notify_title:
+      name: Notification Title
+      default: "Low Battery Alert"
+      selector:
+        text:
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - platform: time_pattern
+    minutes: !input scan_interval
+  - platform: homeassistant
+    event: start
+
+condition: []
+
+action:
+  - variables:
+      target_device: !input target_device
+      trouble_keyword: !input trouble_keyword
+      matched_sensors: >
+        {{ states.binary_sensor
+           | selectattr('entity_id', 'in', device_entities(target_device))
+           | selectattr('state', 'eq', 'on')
+           | selectattr('entity_id', 'contains', trouble_keyword)
+           | map(attribute='attributes.friendly_name')
+           | list }}
+  - if:
+      - condition: template
+        value_template: "{{ matched_sensors | count > 0 }}"
+    then:
+      - action: !input notify_service
+        data:
+          title: !input notify_title
+          message: >
+            The following zones have low batteries:
+            {% for sensor in matched_sensors %}
+            - {{ sensor | replace(' Low Battery', '') }}
+            {% endfor %}

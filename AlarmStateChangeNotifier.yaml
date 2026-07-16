@@ -1,0 +1,110 @@
+blueprint:
+  name: Alarm State Change Notifier
+  description: >
+    Notifies a configurable list of recipients when an alarm_control_panel
+    changes state (arming/armed_home/armed_night/armed_away/disarmed),
+    attributing the action to the person whose HA user_id triggered it.
+  domain: automation
+  input:
+    panel_entity:
+      name: Alarm Panel
+      selector:
+        entity:
+          domain: alarm_control_panel
+
+    panel_display_name:
+      name: Panel Display Name (optional)
+      description: >
+        Overrides the panel name used in the notification message. Leave
+        blank to use the entity's friendly name automatically.
+      default: ""
+      selector:
+        text:
+
+    known_users:
+      name: Known Users
+      description: >
+        List of person friendly names eligible for attribution. Anyone else
+        (e.g. automation/API-triggered changes) shows as "Home Assistant".
+      default:
+        - Raine Pretorius
+      selector:
+        object:
+
+    notification_title:
+      name: Notification Title
+      default: "Alarm State"
+      selector:
+        text:
+
+    recipients:
+      name: Recipients
+      description: >
+        Each item needs: notify_service (e.g. notify.mobile_app_raine_s_a55)
+        and toggle_entity (e.g. input_boolean.raine_notifications).
+      default: []
+      selector:
+        object:
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - trigger: state
+    entity_id: !input panel_entity
+    from: null
+    to:
+      - armed_away
+      - armed_home
+      - armed_night
+      - disarmed
+      - arming
+    id: trigger
+
+condition:
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input panel_entity
+        state: triggered
+      - condition: state
+        entity_id: !input panel_entity
+        state: unavailable
+      - condition: state
+        entity_id: !input panel_entity
+        state: unknown
+      - condition: template
+        value_template: "{{ trigger.from_state.state == 'unavailable' }}"
+
+action:
+  - variables:
+      known_users: !input known_users
+      panel_display_name: !input panel_display_name
+      panel_name: >
+        {{ panel_display_name if panel_display_name != '' else trigger.to_state.name }}
+      user_name: >
+        {{ states.person
+           | selectattr('attributes.user_id', '==', trigger.to_state.context.user_id)
+           | map(attribute='attributes.friendly_name')
+           | first | default('Home Assistant', true) }}
+      who: "{{ user_name if user_name in known_users else 'Home Assistant' }}"
+      verbs:
+        arming: "is arming"
+        armed_home: "has stayed"
+        armed_night: "has slept"
+        armed_away: "has armed"
+        disarmed: "has disarmed"
+      message: "{{ who }} {{ verbs.get(trigger.to_state.state, 'has changed the state of') }} the {{ panel_name }}"
+
+  - repeat:
+      for_each: !input recipients
+      sequence:
+        - if:
+            - condition: state
+              entity_id: "{{ repeat.item.toggle_entity }}"
+              state: "on"
+          then:
+            - action: "{{ repeat.item.notify_service }}"
+              data:
+                title: !input notification_title
+                message: "{{ message }}"

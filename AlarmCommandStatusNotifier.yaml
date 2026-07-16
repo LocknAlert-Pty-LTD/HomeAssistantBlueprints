@@ -1,0 +1,117 @@
+blueprint:
+  name: Alarm Command Status Notifier
+  description: >
+    Listens for Paradox MQTT command_status messages containing a "reason:"
+    field, updates a status input_text, fans out notifications to a
+    configurable list of recipients (each gated by their own toggle helper),
+    optionally speaks it via TTS unless Do Not Disturb is on, then clears
+    the status text after a delay.
+  domain: automation
+  input:
+    mqtt_topic:
+      name: MQTT Topic
+      default: "paradox/interface/command_status"
+      selector:
+        text:
+
+    status_input_text:
+      name: Status input_text helper
+      selector:
+        entity:
+          domain: input_text
+
+    notification_title:
+      name: Notification Title
+      default: "Partition arm blocked ❗️"
+      selector:
+        text:
+
+    recipients:
+      name: Recipients
+      description: >
+        List of recipients. Each item needs:
+          notify_service: e.g. notify.mobile_app_raine_s_a55
+          toggle_entity: e.g. input_boolean.raine_notifications
+      default: []
+      selector:
+        object:
+
+    tts_media_player:
+      name: TTS Media Player
+      selector:
+        entity:
+          domain: media_player
+
+    dnd_switch:
+      name: Do Not Disturb switch
+      selector:
+        entity:
+          domain: switch
+
+    clear_delay_seconds:
+      name: Seconds before clearing status text
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: seconds
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  - trigger: mqtt
+    topic: !input mqtt_topic
+    id: trigger
+
+condition: []
+
+action:
+  - variables:
+      reason: >
+        {% set parts = trigger.payload.split('reason:') %}
+        {{ parts[1].strip() if (parts | count > 1) else '' }}
+
+  - if:
+      - condition: template
+        value_template: "{{ reason != '' }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: !input status_input_text
+        data:
+          value: "{{ reason }}"
+
+      - repeat:
+          for_each: !input recipients
+          sequence:
+            - if:
+                - condition: state
+                  entity_id: "{{ repeat.item.toggle_entity }}"
+                  state: "on"
+              then:
+                - action: "{{ repeat.item.notify_service }}"
+                  data:
+                    title: !input notification_title
+                    message: "{{ reason }}"
+
+      - if:
+          - condition: state
+            entity_id: !input dnd_switch
+            state: "off"
+        then:
+          - action: tts.cloud_say
+            data:
+              cache: true
+              entity_id: !input tts_media_player
+              message: "{{ reason }}"
+
+      - delay:
+          seconds: !input clear_delay_seconds
+
+      - action: input_text.set_value
+        target:
+          entity_id: !input status_input_text
+        data:
+          value: "Hide"
